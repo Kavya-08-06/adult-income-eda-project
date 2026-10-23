@@ -1,0 +1,3 @@
+UCI Adult dataset source page: https://archive.ics.uci.edu/dataset/2/adult
+The Python program downloads the original adult.data and adult.test files on first run.
+Dataset has 14 predictors and 1 target field (15 fields total). Dataset access requires internet.
