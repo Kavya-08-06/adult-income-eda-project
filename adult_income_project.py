@@ -1,252 +1,222 @@
-"""
-Case Study: Exploratory Data Analysis and Visualization of Adult Income
-Dataset: UCI Adult / Census Income (14 input attributes + income target)
-Run: python src/adult_income_project.py
-The script downloads the public dataset, performs cleaning/EDA, trains an MLP,
-and saves plots and metrics under outputs/. No results are hard-coded.
-"""
-from pathlib import Path
-import urllib.request
-import warnings
-warnings.filterwarnings("ignore")
 
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from pathlib import Path
 
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import (
-    accuracy_score, classification_report, confusion_matrix,
-    roc_curve, roc_auc_score, ConfusionMatrixDisplay
-)
 from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import (
+    accuracy_score, classification_report,
+    ConfusionMatrixDisplay, roc_curve, roc_auc_score
+)
 from sklearn.inspection import permutation_importance
+from scipy.sparse import issparse
 import joblib
 
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "outputs"
+# Create output folder
+OUT = Path("outputs")
 OUT.mkdir(exist_ok=True)
-DATA_DIR = ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
-RANDOM_STATE = 42
 
-COLUMNS = [
+# Load dataset
+url = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+
+columns = [
     "age", "workclass", "fnlwgt", "education", "education_num",
     "marital_status", "occupation", "relationship", "race", "sex",
-    "capital_gain", "capital_loss", "hours_per_week", "native_country",
-    "income"
+    "capital_gain", "capital_loss", "hours_per_week",
+    "native_country", "income"
 ]
-TRAIN_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
-TEST_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.test"
 
-def download_file(url, destination):
-    if not destination.exists():
-        print(f"Downloading {url}")
-        urllib.request.urlretrieve(url, destination)
-    return destination
+df = pd.read_csv(url, names=columns, na_values="?", skipinitialspace=True)
+df["income"] = df["income"].str.strip()
+df = df.drop_duplicates().reset_index(drop=True)
 
-def load_dataset():
-    train_path = download_file(TRAIN_URL, DATA_DIR / "adult.data")
-    test_path = download_file(TEST_URL, DATA_DIR / "adult.test")
-    train = pd.read_csv(train_path, names=COLUMNS, na_values="?", skipinitialspace=True)
-    test = pd.read_csv(test_path, names=COLUMNS, na_values="?", skipinitialspace=True,
-                       skiprows=1, skipinitialspace=True)
-    df = pd.concat([train, test], ignore_index=True)
-    df["income"] = df["income"].astype(str).str.strip().str.replace(".", "", regex=False)
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].astype("string").str.strip()
-        df[col] = df[col].replace({"?": pd.NA, "": pd.NA, "nan": pd.NA})
-    return df
+print("Dataset shape:", df.shape)
+print(df.head())
+print("\nMissing values:\n", df.isnull().sum())
+print("\nDescriptive statistics:\n", df.describe(include="all").T)
 
-def save_plot(name):
-    plt.tight_layout()
-    plt.savefig(OUT / name, dpi=160, bbox_inches="tight")
-    plt.close()
+# EDA visualizations
+sns.set_theme(style="whitegrid")
 
-def main():
-    sns.set_theme(style="whitegrid")
-    df = load_dataset()
-    print("\\nDATASET SHAPE:", df.shape)
-    print("\\nFIRST ROWS\\n", df.head())
-    print("\\nINFO\\n", df.info())
-    print("\\nDESCRIPTIVE STATISTICS\\n", df.describe(include="all").T)
-    print("\\nMISSING VALUES\\n", df.isna().sum().sort_values(ascending=False))
-    print("Duplicate rows:", df.duplicated().sum())
+plt.figure(figsize=(7, 5))
+sns.countplot(data=df, x="income")
+plt.title("Income Class Distribution")
+plt.savefig(OUT / "01_income_distribution.png", bbox_inches="tight")
+plt.show()
 
-    # Remove exact duplicate rows; imputation is performed inside the ML pipeline.
-    df = df.drop_duplicates().reset_index(drop=True)
-    df.to_csv(DATA_DIR / "adult_income_cleaned.csv", index=False)
+plt.figure(figsize=(7, 5))
+sns.histplot(data=df, x="age", bins=30, kde=True)
+plt.title("Age Distribution")
+plt.savefig(OUT / "02_age_distribution.png", bbox_inches="tight")
+plt.show()
 
-    # Visual 1: target class distribution
-    plt.figure(figsize=(7, 5))
-    sns.countplot(data=df, x="income", order=["<=50K", ">50K"])
-    plt.title("Income Class Distribution")
-    plt.xlabel("Annual income category"); plt.ylabel("Number of records")
-    save_plot("01_income_class_distribution.png")
+plt.figure(figsize=(7, 5))
+sns.boxplot(data=df, x="income", y="hours_per_week")
+plt.title("Weekly Hours by Income")
+plt.savefig(OUT / "03_hours_boxplot.png", bbox_inches="tight")
+plt.show()
 
-    # Visual 2: age distribution by income
-    plt.figure(figsize=(9, 5))
-    sns.histplot(data=df, x="age", hue="income", bins=30, element="step",
-                 stat="density", common_norm=False)
-    plt.title("Age Distribution by Income Category")
-    plt.xlabel("Age (years)"); plt.ylabel("Density")
-    save_plot("02_age_distribution.png")
+plt.figure(figsize=(9, 6))
+sns.heatmap(df.select_dtypes(include="number").corr(),
+            annot=True, cmap="coolwarm", fmt=".2f")
+plt.title("Numerical Correlation Heatmap")
+plt.savefig(OUT / "04_correlation_heatmap.png", bbox_inches="tight")
+plt.show()
 
-    # Visual 3: weekly hours boxplot
-    plt.figure(figsize=(8, 5))
-    sns.boxplot(data=df, x="income", y="hours_per_week", order=["<=50K", ">50K"])
-    plt.title("Weekly Working Hours by Income Category")
-    plt.xlabel("Income category"); plt.ylabel("Hours worked per week")
-    save_plot("03_hours_boxplot.png")
+plt.figure(figsize=(9, 6))
+sns.countplot(data=df, y="education",
+              order=df["education"].value_counts().index)
+plt.title("Education Distribution")
+plt.savefig(OUT / "05_education_distribution.png", bbox_inches="tight")
+plt.show()
 
-    # Visual 4: correlation heatmap for numerical fields
-    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-    plt.figure(figsize=(10, 7))
-    sns.heatmap(df[numeric_cols].corr(), annot=True, fmt=".2f", cmap="coolwarm",
-                center=0, square=True)
-    plt.title("Correlation Heatmap of Numerical Features")
-    save_plot("04_correlation_heatmap.png")
+sample = df.sample(min(3000, len(df)), random_state=42)
+plt.figure(figsize=(8, 5))
+sns.scatterplot(data=sample, x="age", y="hours_per_week",
+                hue="income", alpha=0.5)
+plt.title("Age vs Weekly Working Hours")
+plt.savefig(OUT / "06_age_hours_scatter.png", bbox_inches="tight")
+plt.show()
 
-    # Visual 5: education category distribution
-    education_order = df["education"].value_counts().index
-    plt.figure(figsize=(11, 6))
-    sns.countplot(data=df, y="education", order=education_order, color="steelblue")
-    plt.title("Records by Education Level")
-    plt.xlabel("Number of records"); plt.ylabel("Education level")
-    save_plot("05_education_frequency.png")
+# Prepare features and target
+X = df.drop(columns="income")
+y = (df["income"] == ">50K").astype(int)
 
-    # Visual 6: age vs weekly hours, colored by target
-    sample = df.sample(min(5000, len(df)), random_state=RANDOM_STATE)
-    plt.figure(figsize=(9, 6))
-    sns.scatterplot(data=sample, x="age", y="hours_per_week", hue="income",
-                    alpha=.45, s=22)
-    plt.title("Age vs Weekly Working Hours (sample)")
-    plt.xlabel("Age (years)"); plt.ylabel("Hours per week")
-    save_plot("06_age_hours_scatter.png")
+numeric_cols = X.select_dtypes(include="number").columns.tolist()
+categorical_cols = X.select_dtypes(include="object").columns.tolist()
 
-    # Distribution/statistical summaries for report evidence
-    stats = df.groupby("income")[["age", "hours_per_week", "education_num",
-                                  "capital_gain", "capital_loss"]].agg(["mean", "median", "std"])
-    stats.to_csv(OUT / "grouped_statistics.csv")
-    df.isna().sum().rename("missing_count").to_csv(OUT / "missing_values.csv")
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.30, random_state=42, stratify=y
+)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp, y_temp, test_size=0.50, random_state=42, stratify=y_temp
+)
 
-    # Target encoding and split: hold out test data before fitting transformations.
-    X = df.drop(columns=["income"])
-    y = (df["income"] == ">50K").astype(int)
-    categorical = X.select_dtypes(include=["object", "string", "category"]).columns.tolist()
-    numerical = X.select_dtypes(include=np.number).columns.tolist()
+numeric_pipe = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler", StandardScaler())
+])
+categorical_pipe = Pipeline([
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(handle_unknown="ignore"))
+])
 
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y, test_size=0.30, random_state=RANDOM_STATE, stratify=y)
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.50, random_state=RANDOM_STATE, stratify=y_temp)
+preprocessor = ColumnTransformer([
+    ("num", numeric_pipe, numeric_cols),
+    ("cat", categorical_pipe, categorical_cols)
+])
 
-    numeric_pipe = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
-    ])
-    categorical_pipe = Pipeline([
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
-    ])
-    preprocessor = ColumnTransformer([
-        ("numeric", numeric_pipe, numerical),
-        ("categorical", categorical_pipe, categorical)
-    ])
+X_train_t = preprocessor.fit_transform(X_train)
+X_val_t = preprocessor.transform(X_val)
+X_test_t = preprocessor.transform(X_test)
 
-    X_train_t = preprocessor.fit_transform(X_train)
-    X_val_t = preprocessor.transform(X_val)
-    X_test_t = preprocessor.transform(X_test)
+# Basic hyperparameter comparison
+tuning_results = []
+best_model = None
+best_score = -1
 
-    # Basic hyperparameter comparison using validation set.
-    candidates = [
-        {"hidden_layer_sizes": (64, 32), "alpha": 0.0001, "learning_rate_init": 0.001},
-        {"hidden_layer_sizes": (100, 50), "alpha": 0.001, "learning_rate_init": 0.001},
-        {"hidden_layer_sizes": (64, 32), "alpha": 0.001, "learning_rate_init": 0.0005}
-    ]
-    tuning_rows, best_model, best_score = [], None, -1
-    for params in candidates:
-        model = MLPClassifier(
-            **params, activation="relu", solver="adam", batch_size=256,
-            max_iter=35, early_stopping=True, validation_fraction=0.1,
-            n_iter_no_change=5, random_state=RANDOM_STATE, verbose=False
-        )
-        model.fit(X_train_t, y_train)
-        val_pred = model.predict(X_val_t)
-        score = accuracy_score(y_val, val_pred)
-        tuning_rows.append({**params, "validation_accuracy": score,
-                            "epochs_run": model.n_iter_})
-        if score > best_score:
-            best_score, best_model = score, model
-    pd.DataFrame(tuning_rows).to_csv(OUT / "hyperparameter_comparison.csv", index=False)
+for layers, alpha in [((32, 16), 0.0001),
+                      ((64, 32), 0.001),
+                      ((100, 50), 0.001)]:
+    candidate = MLPClassifier(
+        hidden_layer_sizes=layers, alpha=alpha,
+        activation="relu", solver="adam", max_iter=35,
+        early_stopping=True, random_state=42
+    )
+    candidate.fit(X_train_t, y_train)
+    score = accuracy_score(y_val, candidate.predict(X_val_t))
+    tuning_results.append({
+        "hidden_layers": str(layers),
+        "alpha": alpha,
+        "validation_accuracy": score
+    })
+    if score > best_score:
+        best_score = score
+        best_model = candidate
 
-    # Evaluate once on the held-out test set.
-    y_pred = best_model.predict(X_test_t)
-    y_prob = best_model.predict_proba(X_test_t)[:, 1]
-    accuracy = accuracy_score(y_test, y_pred)
-    auc = roc_auc_score(y_test, y_prob)
-    report = classification_report(y_test, y_pred, target_names=["<=50K", ">50K"], output_dict=True)
-    pd.DataFrame(report).T.to_csv(OUT / "classification_report.csv")
-    metrics = pd.DataFrame([{
-        "test_accuracy": accuracy, "roc_auc": auc,
-        "best_validation_accuracy": best_score,
-        "train_rows": len(X_train), "validation_rows": len(X_val),
-        "test_rows": len(X_test), "features_before_encoding": X.shape[1]
-    }])
-    metrics.to_csv(OUT / "model_metrics.csv", index=False)
-    print("\\nTEST METRICS\\n", metrics.to_string(index=False))
-    print("\\nCLASSIFICATION REPORT\\n", classification_report(y_test, y_pred,
-          target_names=["<=50K", ">50K"]))
+pd.DataFrame(tuning_results).to_csv(
+    OUT / "hyperparameter_comparison.csv", index=False
+)
 
-    # Result visual 1: confusion matrix
-    ConfusionMatrixDisplay.from_predictions(
-        y_test, y_pred, display_labels=["<=50K", ">50K"], cmap="Blues", values_format="d")
-    plt.title("MLP Confusion Matrix (Test Set)")
-    save_plot("07_confusion_matrix.png")
+# Test evaluation
+y_pred = best_model.predict(X_test_t)
+y_prob = best_model.predict_proba(X_test_t)[:, 1]
+accuracy = accuracy_score(y_test, y_pred)
+auc = roc_auc_score(y_test, y_prob)
 
-    # Result visual 2: ROC curve and AUC
-    fpr, tpr, _ = roc_curve(y_test, y_prob)
-    plt.figure(figsize=(7, 6))
-    plt.plot(fpr, tpr, label=f"MLP (AUC = {auc:.3f})")
-    plt.plot([0, 1], [0, 1], linestyle="--", label="Random classifier")
-    plt.title("ROC Curve — Adult Income Classification")
-    plt.xlabel("False Positive Rate"); plt.ylabel("True Positive Rate")
-    plt.legend(loc="lower right")
-    save_plot("08_roc_curve.png")
+print("Test accuracy:", accuracy)
+print("ROC-AUC:", auc)
+print(classification_report(y_test, y_pred))
 
-    # Result visual 3: training loss per epoch
-    plt.figure(figsize=(8, 5))
-    plt.plot(range(1, len(best_model.loss_curve_) + 1), best_model.loss_curve_, marker="o")
-    plt.title("MLP Training Loss vs Iteration")
-    plt.xlabel("Iteration / epoch"); plt.ylabel("Training loss")
-    save_plot("09_loss_curve.png")
+pd.DataFrame([{
+    "test_accuracy": accuracy,
+    "roc_auc": auc,
+    "validation_accuracy": best_score
+}]).to_csv(OUT / "model_metrics.csv", index=False)
 
-    # Result visual 4: permutation feature importance on a manageable test sample.
-    # Importance is computed on the transformed feature matrix.
-    feat_names = preprocessor.get_feature_names_out()
-    X_imp = X_test_t[:min(2500, len(X_test_t))]
-    y_imp = y_test.iloc[:len(X_imp)]
-    perm = permutation_importance(best_model, X_imp, y_imp, n_repeats=3,
-                                  random_state=RANDOM_STATE, scoring="accuracy", n_jobs=-1)
-    imp = pd.DataFrame({"feature": feat_names, "importance_mean": perm.importances_mean,
-                        "importance_std": perm.importances_std})
-    imp = imp.sort_values("importance_mean", ascending=False).head(15)
-    imp.to_csv(OUT / "feature_importance.csv", index=False)
-    plt.figure(figsize=(10, 7))
-    sns.barplot(data=imp, x="importance_mean", y="feature", color="slateblue")
-    plt.title("Top 15 Permutation Feature Importances")
-    plt.xlabel("Mean decrease in accuracy after permutation"); plt.ylabel("Encoded feature")
-    save_plot("10_feature_importance.png")
+pd.DataFrame(classification_report(
+    y_test, y_pred,
+    target_names=["<=50K", ">50K"],
+    output_dict=True
+)).T.to_csv(OUT / "classification_report.csv")
 
-    joblib.dump({"preprocessor": preprocessor, "model": best_model},
-                OUT / "adult_income_mlp.joblib")
-    print(f"\\nFinished. Plots and metrics saved to: {OUT}")
-    print("Note: results are generated from the dataset at runtime; use those actual values in your report.")
+# Confusion matrix
+ConfusionMatrixDisplay.from_predictions(
+    y_test, y_pred, display_labels=["<=50K", ">50K"], cmap="Blues"
+)
+plt.title("MLP Confusion Matrix")
+plt.savefig(OUT / "07_confusion_matrix.png", bbox_inches="tight")
+plt.show()
 
-if __name__ == "__main__":
-    main()
+# ROC curve
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+plt.figure(figsize=(7, 5))
+plt.plot(fpr, tpr, label=f"AUC = {auc:.3f}")
+plt.plot([0, 1], [0, 1], "--")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC Curve")
+plt.legend()
+plt.savefig(OUT / "08_roc_curve.png", bbox_inches="tight")
+plt.show()
+
+# Training loss
+plt.figure(figsize=(7, 5))
+plt.plot(best_model.loss_curve_)
+plt.title("Training Loss vs Iteration")
+plt.xlabel("Iteration")
+plt.ylabel("Loss")
+plt.savefig(OUT / "09_training_loss.png", bbox_inches="tight")
+plt.show()
+
+# Permutation feature importance
+X_imp = X_test_t[:min(1000, X_test_t.shape[0])]
+y_imp = y_test.iloc[:X_imp.shape[0]]
+if issparse(X_imp):
+    X_imp = X_imp.toarray()
+
+importance = permutation_importance(
+    best_model, X_imp, y_imp, n_repeats=3,
+    random_state=42, scoring="accuracy", n_jobs=-1
+)
+importance_df = pd.DataFrame({
+    "feature": preprocessor.get_feature_names_out(),
+    "importance": importance.importances_mean
+}).sort_values("importance", ascending=False)
+
+importance_df.to_csv(OUT / "feature_importance.csv", index=False)
+
+joblib.dump(
+    {"preprocessor": preprocessor, "model": best_model},
+    OUT / "adult_income_mlp.joblib"
+)
+df.to_csv(OUT / "adult_income_cleaned.csv", index=False)
+
+print("Project completed. All results saved in the outputs folder.")
